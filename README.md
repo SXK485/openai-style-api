@@ -7,7 +7,7 @@
 ## 用途
 屏蔽不同大模型API的差异，统一用openai api标准格式使用大模型, 也可以用来做api-key的二次分发管理; 配置化管理不同大模型调用参数，让你在使用大模型的时候只需关注 api-key 和 messages
 
- ***README_EN.md may not have been updated in a timely manner***
+ ***此fork仓库主要对智谱的api调用做了一些调整，以便能够使用智谱最新的glm-4模型，支持stream方式调用***
 ## 功能
 
 - [x] 支持多种大模型，当前已支持
