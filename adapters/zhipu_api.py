@@ -7,6 +7,7 @@ import time
 
 import cachetools.func
 import jwt
+import json
 from loguru import logger
 from utils.util import num_tokens_from_string
 
@@ -65,8 +66,7 @@ class ZhiPuApiModel(ModelAdapter):
         '''
         # 发起post请求
         model = self.model if self.model else request.model
-        invoke_method = "sse-invoke" if request.stream else "invoke"
-        url = f"https://open.bigmodel.cn/api/paas/v3/model-api/{model}/{invoke_method}"
+        url = f"https://open.bigmodel.cn/api/paas/v4/chat/completions"
         token = generate_token(self.api_key)
         params = self.convert_params(request)
         if request.stream:
@@ -74,6 +74,8 @@ class ZhiPuApiModel(ModelAdapter):
             event_data = SSEClient(data)
             for event in event_data.events():
                 logger.debug(f"chat_completions event: {event}")
+                if event.data.strip() == "[DONE]":
+                    break
                 yield ChatCompletionResponse(**self.convert_response_stream(event, model))
         else:
             global headers
@@ -83,7 +85,6 @@ class ZhiPuApiModel(ModelAdapter):
             yield ChatCompletionResponse(**self.convert_response(data, model))
 
     def convert_response(self, resp, model):
-        resp = resp["data"]
         req_id = resp["request_id"]
         openai_response = {
             "id": f"chatcmpl-{req_id}",
@@ -99,7 +100,7 @@ class ZhiPuApiModel(ModelAdapter):
                 {
                     "message": {
                         "role": "assistant",
-                        "content": resp["choices"][0]["content"],
+                        "content": resp["choices"][0]["message"]["content"],
                     },
                     "index": 0,
                     "finish_reason": "stop",
@@ -112,8 +113,18 @@ class ZhiPuApiModel(ModelAdapter):
         completion = event_data.data
         completion_tokens = num_tokens_from_string(completion)
         finish_reason = "stop" if event_data.event == "finish" else None
+
+        # Check if completion is a valid non-empty string and parse JSON
+        if completion and isinstance(completion, str):
+            try:
+                content_data = json.loads(completion)
+                content_id = content_data.get("id", f"chatcmpl-{event_data.id}")
+                content_text = content_data.get("choices")[0]["delta"]["content"]
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing error: {e}")
+
         openai_response = {
-            "id": f"chatcmpl-{event_data.id}",
+            "id": content_id,
             "object": "chat.completion.chunk",
             "created": int(time.time()),
             "model": model,
@@ -126,7 +137,7 @@ class ZhiPuApiModel(ModelAdapter):
                 {
                     "delta": {
                         "role": "assistant",
-                        "content": completion,
+                        "content": content_text,
                     },
                     "index": 0,
                     "finish_reason": finish_reason,
@@ -142,7 +153,9 @@ class ZhiPuApiModel(ModelAdapter):
         req_args = request.model_dump(exclude_none=True, exclude_defaults=True)
         req_args.update(self.config_args)
         params = {
-            "prompt": self.convert_messages_to_prompt(request.messages),
+            "model": request.model,
+            "messages": self.convert_messages_to_prompt(request.messages),
+            "stream": request.stream,
         }
         if req_args.get("temperature"):
             params["temperature"] = req_args.get("temperature")
